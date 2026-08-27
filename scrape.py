@@ -84,7 +84,10 @@ logger = logging.getLogger(__name__)
 class Settings:
     zenrows_api_key: str
     zenrows_endpoint: str = "https://api.zenrows.com/v1/"
-    request_timeout_seconds: int = 150
+    # JS render + premium proxy + wait_for on a search results page can
+    # legitimately take well over 150s -- a timeout here just means the
+    # client gave up before ZenRows finished, not that anything is broken.
+    request_timeout_seconds: int = 230
     request_delay_seconds: float = 0.75
     max_retries: int = 3
     retry_backoff_seconds: float = 2.0
