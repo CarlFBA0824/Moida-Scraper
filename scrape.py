@@ -298,7 +298,12 @@ def collect_product_urls(
 
     for page in range(1, max_pages + 1):
         page_url = _add_query_params(collection_url, page=page)
-        response = client.fetch(page_url, js_render=True, premium_proxy=True, wait_for="a[href*='product']")
+        # No wait_for selector here: it assumes a specific CSS shape for
+        # product links, and ZenRows returned RESP001 ("could not get
+        # content") against Moida's search page when relying on it - likely
+        # because that selector never appeared. A fixed render delay is a
+        # safer bet across different page markups.
+        response = client.fetch(page_url, js_render=True, premium_proxy=True, wait_ms=5000)
         page_urls = _urls_from_html(response.text, base_url)
         new_urls = set(page_urls) - all_urls
         if not new_urls:
