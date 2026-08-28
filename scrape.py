@@ -9,6 +9,16 @@ Targets any Moidaus (moidaus.com) Shopify page: a /collections/<handle> page
 or a /search?q=... results page - pass a different --collection-url to
 target a different collection/search on the same store.
 
+Product discovery defaults to /collections/all (every product on the store)
+filtered down by --vendor-filter (default "Medicube"), rather than
+/search?q=medicube. Moida's /search endpoint consistently fails through
+ZenRows (422 RESP001 "could not get content" after ~150-170s, 0 credits
+charged - a real server-side failure, not a fluke) regardless of wait
+strategy, while /collections/all/products.json is public, cheap (no JS
+rendering needed), and each product entry includes a "vendor" field to
+filter on - so walking the whole catalog's lightweight JSON and keeping
+only vendor-matching products sidesteps the block entirely.
+
 Plug-and-play, single-file version. Setup:
     pip install requests beautifulsoup4 lxml python-dotenv
     Create a .env file next to this script containing:
@@ -16,9 +26,9 @@ Plug-and-play, single-file version. Setup:
 
 Run:
     python scrape.py --limit 3     (quick test on 3 products)
-    python scrape.py               (full run, default: medicube search)
-    python scrape.py --collection-url "https://moidaus.com/search?q=medicube&options%5Bprefix%5D=last"
-    python scrape.py --collection-url https://moidaus.com/collections/awards-moida-2026-mid-year-awards-_event
+    python scrape.py               (full run, default: all Medicube products)
+    python scrape.py --vendor-filter "Anua"
+    python scrape.py --collection-url https://moidaus.com/collections/awards-moida-2026-mid-year-awards-_event --vendor-filter ""
 
 Results are written to output/<site>_<collection>_<timestamp>.csv and .json,
 one row per variation (a product with 3 sizes/flavors produces 3 rows):
@@ -174,6 +184,17 @@ def _urls_from_products_json(payload: dict, base_url: str) -> List[str]:
     return urls
 
 
+def _urls_from_products_json_filtered(payload: dict, base_url: str, vendor_filter: Optional[str]) -> List[str]:
+    """Like _urls_from_products_json, but keeps only products whose "vendor"
+    field case-insensitively matches vendor_filter (or all products if
+    vendor_filter is falsy) - lets discovery walk a big catch-all collection
+    like /collections/all and keep just the brand we care about."""
+    products = payload.get("products", [])
+    if vendor_filter:
+        products = [p for p in products if (p.get("vendor") or "").strip().lower() == vendor_filter.strip().lower()]
+    return _urls_from_products_json({"products": products}, base_url)
+
+
 def _urls_from_html(html: str, base_url: str) -> List[str]:
     soup = BeautifulSoup(html, "lxml")
     urls: Set[str] = set()
@@ -196,7 +217,8 @@ def _add_query_params(url: str, **params: Any) -> str:
 
 
 def collect_product_urls(
-    client: ZenRowsClient, settings: Settings, collection_url: str, max_pages: int = 10
+    client: ZenRowsClient, settings: Settings, collection_url: str, max_pages: int = 10,
+    vendor_filter: Optional[str] = None,
 ) -> Tuple[List[str], bool]:
     collection_url = collection_url.rstrip("/")
     base_url = "{0.scheme}://{0.netloc}".format(urllib.parse.urlsplit(collection_url))
@@ -216,23 +238,34 @@ def collect_product_urls(
             logger.info("products.json unavailable (%s); falling back to HTML parsing", exc)
             break
 
-        page_urls = _urls_from_products_json(payload, base_url)
-        if not page_urls:
-            is_shopify = True
+        is_shopify = True
+        raw_count = len(payload.get("products", []))
+        if raw_count == 0:
             break
+
+        page_urls = _urls_from_products_json_filtered(payload, base_url, vendor_filter)
         new_urls = set(page_urls) - all_urls
         all_urls.update(page_urls)
-        is_shopify = True
         logger.info(
-            "products.json page %d: %d products (%d new, %d total)",
-            page, len(page_urls), len(new_urls), len(all_urls),
+            "products.json page %d: %d products (%d matching%s, %d total matched)",
+            page, raw_count, len(new_urls),
+            f" vendor={vendor_filter!r}" if vendor_filter else "", len(all_urls),
         )
-        if not new_urls:
-            break
+        if raw_count < 250:
+            break  # last page: Shopify returned fewer than the requested limit
         time.sleep(settings.request_delay_seconds)
 
-    if all_urls:
+    if all_urls or is_shopify:
+        # is_shopify but no matches is a real, final result (e.g. vendor_filter
+        # matched nothing anywhere in the catalog) - don't fall through to
+        # HTML parsing, which can't filter by vendor at all.
         return sorted(all_urls), is_shopify
+
+    if vendor_filter:
+        logger.warning(
+            "vendor_filter=%r requested but falling back to HTML parsing, which can't filter by vendor "
+            "-- results below are unfiltered.", vendor_filter,
+        )
 
     for page in range(1, max_pages + 1):
         page_url = _add_query_params(collection_url, page=page)
@@ -510,17 +543,19 @@ def export_json(rows: List[Dict], path: Path) -> None:
 # Entry point
 # --------------------------------------------------------------------------
 
-def slug_from_url(url: str) -> str:
+def slug_from_url(url: str, vendor_filter: Optional[str] = None) -> str:
     """Derive a short, filesystem-safe label from a collection/search URL's
-    host and last path segment (or its query, for a /search URL) - used to
-    prefix output filenames so results from different searches/collections
-    don't collide or get confused."""
+    host and last path segment (or its query, for a /search URL), plus the
+    vendor filter if any - used to prefix output filenames so results from
+    different searches/collections/vendors don't collide or get confused."""
     parts = urllib.parse.urlsplit(url)
     host = parts.netloc.replace("www.", "").split(".")[0]
     segment = parts.path.rstrip("/").rsplit("/", 1)[-1] or "collection"
     if segment == "search" and parts.query:
         query = dict(urllib.parse.parse_qsl(parts.query))
         segment = f"search-{query.get('q', '')}" or segment
+    if vendor_filter:
+        segment = f"{segment}-{vendor_filter}"
     return re.sub(r"[^a-zA-Z0-9_-]", "-", f"{host}_{segment}")[:80]
 
 
@@ -530,8 +565,15 @@ def main() -> None:
     )
     parser.add_argument(
         "--collection-url", type=str,
-        default="https://moidaus.com/search?q=medicube&options%5Bprefix%5D=last",
-        help="Full URL of the collection or search page to scrape (default: Moidaus medicube search)",
+        default="https://moidaus.com/collections/all",
+        help="Full URL of the collection or search page to scrape (default: Moidaus /collections/all, "
+             "filtered by --vendor-filter -- /search is blocked, see README)",
+    )
+    parser.add_argument(
+        "--vendor-filter", type=str, default="Medicube",
+        help="Only keep products whose Shopify 'vendor' field matches this (case-insensitive). "
+             "Only applies to a JSON-backed collection page (not the HTML-parsing fallback). "
+             "Pass '' to keep every product in --collection-url.",
     )
     parser.add_argument("--max-pages", type=int, default=10)
     parser.add_argument("--workers", type=int, default=4)
@@ -568,8 +610,14 @@ def main() -> None:
         print(json.dumps(rows, indent=2))
         return
 
-    logger.info("Collecting product URLs from %s", args.collection_url)
-    product_urls, is_shopify = collect_product_urls(client, settings, args.collection_url, max_pages=args.max_pages)
+    vendor_filter = args.vendor_filter or None
+    logger.info(
+        "Collecting product URLs from %s%s",
+        args.collection_url, f" (vendor={vendor_filter!r})" if vendor_filter else "",
+    )
+    product_urls, is_shopify = collect_product_urls(
+        client, settings, args.collection_url, max_pages=args.max_pages, vendor_filter=vendor_filter,
+    )
     logger.info("Found %d product URLs (shopify-style endpoints: %s)", len(product_urls), is_shopify)
 
     if not product_urls:
@@ -598,7 +646,7 @@ def main() -> None:
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = Path(args.output_dir)
-    slug = slug_from_url(args.collection_url)
+    slug = slug_from_url(args.collection_url, vendor_filter)
     csv_path = output_dir / f"{slug}_{timestamp}.csv"
     json_path = output_dir / f"{slug}_{timestamp}.json"
     export_csv(all_rows, csv_path)

@@ -40,9 +40,15 @@ like a block/rate-limit specific to Moida's `/search` endpoint (possibly a
 separate, more heavily bot-protected backend than plain product/collection
 pages), not the whole site.
 
-**Workaround:** use a `/collections/<handle>` page instead of `/search` when
-one exists for the products you want - it uses the same lightweight
-Shopify product-listing pattern that already works.
+**Workaround:** discovery now defaults to `/collections/all` (every product
+on the store) filtered by `--vendor-filter` (default `Medicube`), instead of
+`/search`. `/collections/all/products.json` is public and cheap (no JS
+rendering), and each product entry includes a `"vendor"` field - so this
+walks the whole catalog's lightweight JSON and keeps only vendor-matching
+products, sidestepping the `/search` block entirely. Change `--vendor-filter`
+to target a different brand, or pass `--vendor-filter ""` to keep every
+product on a `--collection-url` you point at directly (e.g. a real
+`/collections/<handle>` page, if one exists for what you want).
 
 ## Setup
 
@@ -61,24 +67,25 @@ Quick smoke test (3 products, check the output before a full run):
 python scrape.py --limit 3
 ```
 
-Full run (default: the `medicube` search on moidaus.com):
+Full run (default: every Medicube product on moidaus.com):
 
 ```bash
 python scrape.py
 ```
 
-Target a different search or collection:
+Target a different brand or collection:
 
 ```bash
-python scrape.py --collection-url "https://moidaus.com/search?q=medicube&options%5Bprefix%5D=last"
-python scrape.py --collection-url https://moidaus.com/collections/awards-moida-2026-mid-year-awards-_event
+python scrape.py --vendor-filter "Anua"
+python scrape.py --collection-url https://moidaus.com/collections/awards-moida-2026-mid-year-awards-_event --vendor-filter ""
 ```
 
 Options:
 
 | Flag | Default | Description |
 |---|---|---|
-| `--collection-url` | Moida medicube search | Full URL of the collection/search page to scrape |
+| `--collection-url` | `https://moidaus.com/collections/all` | Full URL of the collection page to scrape |
+| `--vendor-filter` | `Medicube` | Only keep products whose Shopify `vendor` field matches (case-insensitive); pass `""` to keep everything |
 | `--max-pages` | 10 | Max pages to walk when discovering products |
 | `--workers` | 4 | Concurrent product page fetches |
 | `--limit N` | none | Only scrape the first N products |
@@ -96,10 +103,11 @@ columns:
 
 ## How it works
 
-1. Collection/search page discovery tries the Shopify `products.json`
-   endpoint first (fast, no JS rendering), and falls back to rendering +
-   parsing the page's HTML for product links - this fallback is what
-   handles `/search` pages, since Shopify has no JSON endpoint for search.
+1. Collection page discovery walks `products.json` (fast, no JS rendering,
+   250 products per page) and keeps only entries matching `--vendor-filter`;
+   falls back to rendering + parsing HTML for product links only if a
+   collection has no `products.json` endpoint at all (this fallback can't
+   filter by vendor).
 2. Each product page is fetched through ZenRows (JS rendering + premium
    proxy, since retail sites commonly bot-protect product pages), and
    `original_price`/`sale_price`/variation/SKU/GTIN are extracted from the
@@ -109,8 +117,8 @@ columns:
 
 ## Notes
 
-- ZenRows credit usage: roughly 1 request per page discovered + up to 2
-  requests per product (JSON probe + rendered HTML). Use `--limit` while
-  tuning.
+- ZenRows credit usage: roughly 1 cheap request per 250 products walked
+  during discovery + up to 2 requests per matched product (JSON probe +
+  rendered HTML). Use `--limit` while tuning.
 - Respect the site's `robots.txt` and terms of service, and keep request
   concurrency reasonable (`--workers`).
