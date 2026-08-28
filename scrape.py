@@ -337,13 +337,17 @@ def _extract_jsonld_blocks(soup: BeautifulSoup) -> List[Dict[str, Any]]:
     return blocks
 
 
-def _find_product_jsonld(blocks: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def _find_jsonld_of_type(blocks: List[Dict[str, Any]], wanted_type: str) -> Optional[Dict[str, Any]]:
     for block in blocks:
         block_type = block.get("@type")
         types = block_type if isinstance(block_type, list) else [block_type]
-        if any(t == "Product" for t in types if t):
+        if any(t == wanted_type for t in types if t):
             return block
     return None
+
+
+def _find_product_jsonld(blocks: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    return _find_jsonld_of_type(blocks, "Product")
 
 
 def _first_gtin(obj: Dict[str, Any]) -> Optional[str]:
@@ -368,36 +372,73 @@ def _normalize_offers(product: Dict[str, Any]) -> List[Dict[str, Any]]:
     return []
 
 
+def _variant_from_offer(
+    offer: Dict[str, Any], fallback_name: Optional[str], fallback_gtin: Optional[str],
+    fallback_sku: Optional[str] = None,
+) -> Dict[str, Any]:
+    price_spec = offer.get("priceSpecification") or {}
+    return {
+        "sku": offer.get("sku") or fallback_sku,
+        "name": offer.get("name") or fallback_name,
+        "price": offer.get("price") or price_spec.get("price"),
+        "currency": offer.get("priceCurrency") or price_spec.get("priceCurrency") or "USD",
+        "availability": offer.get("availability"),
+        "gtin": _first_gtin(offer) or fallback_gtin,
+    }
+
+
 def parse_product_jsonld(html: str) -> Dict[str, Any]:
     soup = BeautifulSoup(html, "lxml")
     blocks = _extract_jsonld_blocks(soup)
+
     product = _find_product_jsonld(blocks)
-    if not product:
-        return {"name": None, "sku": None, "gtin": None, "variants": []}
+    if product:
+        top_gtin = _first_gtin(product)
+        variants = [
+            _variant_from_offer(offer, product.get("name"), top_gtin)
+            for offer in _normalize_offers(product)
+        ]
+        return {"name": product.get("name"), "sku": product.get("sku"), "gtin": top_gtin, "variants": variants}
 
-    top_gtin = _first_gtin(product)
-    offers = _normalize_offers(product)
+    # Some Shopify themes emit schema.org's "ProductGroup" instead of a plain
+    # "Product" for a product with multiple variants (e.g. color options) -
+    # each variant is its own Product-like node inside "hasVariant", carrying
+    # its own sku/gtin rather than a flat "offers" list on the top object.
+    group = _find_jsonld_of_type(blocks, "ProductGroup")
+    if group:
+        top_gtin = _first_gtin(group)
+        variants = []
+        for variant_node in group.get("hasVariant") or []:
+            if not isinstance(variant_node, dict):
+                continue
+            variant_gtin = _first_gtin(variant_node) or top_gtin
+            offers = _normalize_offers(variant_node)
+            if offers:
+                variants.append(
+                    _variant_from_offer(
+                        offers[0], variant_node.get("name") or group.get("name"), variant_gtin,
+                        fallback_sku=variant_node.get("sku"),
+                    )
+                )
+            else:
+                variants.append(
+                    {
+                        "sku": variant_node.get("sku"),
+                        "name": variant_node.get("name") or group.get("name"),
+                        "price": None,
+                        "currency": "USD",
+                        "availability": None,
+                        "gtin": variant_gtin,
+                    }
+                )
+        return {
+            "name": group.get("name"),
+            "sku": group.get("productGroupID"),
+            "gtin": top_gtin,
+            "variants": variants,
+        }
 
-    variants = []
-    for offer in offers:
-        price_spec = offer.get("priceSpecification") or {}
-        variants.append(
-            {
-                "sku": offer.get("sku"),
-                "name": offer.get("name") or product.get("name"),
-                "price": offer.get("price") or price_spec.get("price"),
-                "currency": offer.get("priceCurrency") or price_spec.get("priceCurrency") or "USD",
-                "availability": offer.get("availability"),
-                "gtin": _first_gtin(offer) or top_gtin,
-            }
-        )
-
-    return {
-        "name": product.get("name"),
-        "sku": product.get("sku"),
-        "gtin": top_gtin,
-        "variants": variants,
-    }
+    return {"name": None, "sku": None, "gtin": None, "variants": []}
 
 
 def fetch_shopify_variants(client: ZenRowsClient, product_url: str) -> Optional[Dict[str, Any]]:
@@ -630,8 +671,11 @@ def main() -> None:
     if args.url:
         if args.debug:
             response = client.fetch(args.url, js_render=True, premium_proxy=True)
+            raw_blocks = _extract_jsonld_blocks(BeautifulSoup(response.text, "lxml"))
+            print("--- Raw JSON-LD block types found on the page ---")
+            print([b.get("@type") for b in raw_blocks])
             jsonld = parse_product_jsonld(response.text)
-            print("--- JSON-LD extraction (schema.org Product/Offers) ---")
+            print("--- JSON-LD extraction (schema.org Product/ProductGroup/Offers) ---")
             print(json.dumps(jsonld, indent=2))
             shopify = fetch_shopify_variants(client, args.url)
             print("--- Shopify per-product JSON (.json endpoint) ---")
