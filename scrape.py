@@ -241,8 +241,9 @@ def collect_product_urls(
     vendor_filter: Optional[str] = None,
 ) -> Tuple[List[str], bool]:
     collection_url = collection_url.rstrip("/")
-    base_url = "{0.scheme}://{0.netloc}".format(urllib.parse.urlsplit(collection_url))
-    is_search = "/search" in urllib.parse.urlsplit(collection_url).path
+    split = urllib.parse.urlsplit(collection_url)
+    base_url = f"{split.scheme}://{split.netloc}"
+    is_search = "/search" in split.path
     all_urls: Set[str] = set()
     is_shopify = False
 
@@ -250,7 +251,13 @@ def collect_product_urls(
     # endpoint (that pattern only exists for /collections/<handle>), so
     # don't waste a request probing for it -- go straight to HTML parsing.
     for page in [] if is_search else range(1, max_pages + 1):
-        json_url = f"{collection_url}/products.json?limit=250&page={page}"
+        # Build the products.json URL from the path only, discarding any
+        # existing query string (e.g. a "?q=..." filter, which the JSON API
+        # doesn't understand anyway and would otherwise produce a malformed
+        # double-"?" URL like the one that broke /search discovery earlier).
+        json_url = urllib.parse.urlunsplit(
+            split._replace(path=f"{split.path}/products.json", query=urllib.parse.urlencode({"limit": 250, "page": page}))
+        )
         try:
             response = client.fetch(json_url, js_render=False, premium_proxy=False, max_retries=1)
             payload = response.json()
