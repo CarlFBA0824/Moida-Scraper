@@ -605,6 +605,10 @@ def main() -> None:
         help="Debug mode: scrape a single product URL and print the raw result, skip collection discovery",
     )
     parser.add_argument(
+        "--debug", action="store_true",
+        help="With --url, also print the raw JSON-LD and Shopify per-product JSON before the final row(s)",
+    )
+    parser.add_argument(
         "--skip-cart-price", action="store_true",
         help="Leave cart_price blank instead of computing sale_price minus the assumed cart discount",
     )
@@ -624,6 +628,15 @@ def main() -> None:
     discount_code = args.discount_code or None
 
     if args.url:
+        if args.debug:
+            response = client.fetch(args.url, js_render=True, premium_proxy=True)
+            jsonld = parse_product_jsonld(response.text)
+            print("--- JSON-LD extraction (schema.org Product/Offers) ---")
+            print(json.dumps(jsonld, indent=2))
+            shopify = fetch_shopify_variants(client, args.url)
+            print("--- Shopify per-product JSON (.json endpoint) ---")
+            print(json.dumps(shopify, indent=2))
+            print("--- Final scraped row(s) ---")
         rows = scrape_product(
             client, settings, args.url, try_shopify_json=True,
             fetch_cart_price=fetch_cart_price, discount_code=discount_code, discount_pct=args.discount_pct,
