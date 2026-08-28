@@ -498,7 +498,13 @@ def scrape_product(
     discount_code: Optional[str] = None,
     discount_pct: float = 30.0,
 ) -> List[Dict[str, Any]]:
-    response = client.fetch(product_url, js_render=True, premium_proxy=True)
+    # wait_ms gives the page's JS a moment to finish populating JSON-LD
+    # before ZenRows captures the HTML - a debug comparison against this
+    # exact page (Zero Pore Cooling Mask) showed two live fetches of the
+    # same URL disagreeing on whether a variant's GTIN was present at all,
+    # which looks like async-rendered data occasionally getting captured
+    # before it's ready rather than a genuine data gap.
+    response = client.fetch(product_url, js_render=True, premium_proxy=True, wait_ms=3000)
     jsonld = parse_product_jsonld(response.text)
     shopify = fetch_shopify_variants(client, product_url) if try_shopify_json else None
     return build_rows_from_product_data(product_url, jsonld, shopify, fetch_cart_price, discount_code, discount_pct)
@@ -690,7 +696,7 @@ def main() -> None:
         # slightly differently (JS rendering isn't perfectly deterministic),
         # which previously made --debug output disagree with itself for no
         # real reason.
-        response = client.fetch(args.url, js_render=True, premium_proxy=True)
+        response = client.fetch(args.url, js_render=True, premium_proxy=True, wait_ms=3000)
         jsonld = parse_product_jsonld(response.text)
         shopify = fetch_shopify_variants(client, args.url)
 
