@@ -184,14 +184,29 @@ def _urls_from_products_json(payload: dict, base_url: str) -> List[str]:
     return urls
 
 
+def _product_matches_vendor(product: dict, needle: str) -> bool:
+    """True if needle appears (case-insensitively, substring) in the
+    product's vendor field OR any of its tags. Substring rather than exact
+    match, and checking tags too, so a collab line (e.g. "MOIDA X MEDICUBE")
+    or a product tagged with the brand under a different vendor field isn't
+    silently dropped - erring toward over-matching rather than missing real
+    products, since a few false positives are easy to spot-check but a
+    missed product isn't."""
+    needle = needle.strip().lower()
+    vendor = (product.get("vendor") or "").lower()
+    if needle in vendor:
+        return True
+    return any(needle in (tag or "").lower() for tag in (product.get("tags") or []))
+
+
 def _urls_from_products_json_filtered(payload: dict, base_url: str, vendor_filter: Optional[str]) -> List[str]:
-    """Like _urls_from_products_json, but keeps only products whose "vendor"
-    field case-insensitively matches vendor_filter (or all products if
+    """Like _urls_from_products_json, but keeps only products matching
+    vendor_filter per _product_matches_vendor (or all products if
     vendor_filter is falsy) - lets discovery walk a big catch-all collection
     like /collections/all and keep just the brand we care about."""
     products = payload.get("products", [])
     if vendor_filter:
-        products = [p for p in products if (p.get("vendor") or "").strip().lower() == vendor_filter.strip().lower()]
+        products = [p for p in products if _product_matches_vendor(p, vendor_filter)]
     return _urls_from_products_json({"products": products}, base_url)
 
 
@@ -571,9 +586,10 @@ def main() -> None:
     )
     parser.add_argument(
         "--vendor-filter", type=str, default="Medicube",
-        help="Only keep products whose Shopify 'vendor' field matches this (case-insensitive). "
-             "Only applies to a JSON-backed collection page (not the HTML-parsing fallback). "
-             "Pass '' to keep every product in --collection-url.",
+        help="Only keep products where this appears (case-insensitive, substring) in the Shopify "
+             "'vendor' field or any tag -- catches collabs/mislabeled vendors too, at the cost of the "
+             "occasional false positive. Only applies to a JSON-backed collection page (not the "
+             "HTML-parsing fallback). Pass '' to keep every product in --collection-url.",
     )
     parser.add_argument("--max-pages", type=int, default=10)
     parser.add_argument("--workers", type=int, default=4)
