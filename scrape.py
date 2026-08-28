@@ -501,7 +501,23 @@ def scrape_product(
     response = client.fetch(product_url, js_render=True, premium_proxy=True)
     jsonld = parse_product_jsonld(response.text)
     shopify = fetch_shopify_variants(client, product_url) if try_shopify_json else None
+    return build_rows_from_product_data(product_url, jsonld, shopify, fetch_cart_price, discount_code, discount_pct)
 
+
+def build_rows_from_product_data(
+    product_url: str,
+    jsonld: Dict[str, Any],
+    shopify: Optional[Dict[str, Any]],
+    fetch_cart_price: bool = False,
+    discount_code: Optional[str] = None,
+    discount_pct: float = 30.0,
+) -> List[Dict[str, Any]]:
+    """Builds the final row(s) from already-fetched JSON-LD + Shopify data.
+    Split out from scrape_product so a caller that already has both (e.g.
+    --debug mode) can build the same rows without a second live fetch -
+    two separate ZenRows fetches of the same URL can render slightly
+    differently, which previously made debug output disagree with the
+    real scrape for no code reason."""
     product_name = (shopify or {}).get("name") or jsonld.get("name") or product_url
     gtin_by_sku = {v["sku"]: v["gtin"] for v in jsonld["variants"] if v.get("sku")}
     price_by_sku = {v["sku"]: (v["price"], v["currency"]) for v in jsonld["variants"] if v.get("sku")}
@@ -669,20 +685,27 @@ def main() -> None:
     discount_code = args.discount_code or None
 
     if args.url:
+        # One fetch, shared by the debug dump and the row-building below -
+        # two separate live ZenRows fetches of the same URL can render
+        # slightly differently (JS rendering isn't perfectly deterministic),
+        # which previously made --debug output disagree with itself for no
+        # real reason.
+        response = client.fetch(args.url, js_render=True, premium_proxy=True)
+        jsonld = parse_product_jsonld(response.text)
+        shopify = fetch_shopify_variants(client, args.url)
+
         if args.debug:
-            response = client.fetch(args.url, js_render=True, premium_proxy=True)
             raw_blocks = _extract_jsonld_blocks(BeautifulSoup(response.text, "lxml"))
             print("--- Raw JSON-LD block types found on the page ---")
             print([b.get("@type") for b in raw_blocks])
-            jsonld = parse_product_jsonld(response.text)
             print("--- JSON-LD extraction (schema.org Product/ProductGroup/Offers) ---")
             print(json.dumps(jsonld, indent=2))
-            shopify = fetch_shopify_variants(client, args.url)
             print("--- Shopify per-product JSON (.json endpoint) ---")
             print(json.dumps(shopify, indent=2))
             print("--- Final scraped row(s) ---")
-        rows = scrape_product(
-            client, settings, args.url, try_shopify_json=True,
+
+        rows = build_rows_from_product_data(
+            args.url, jsonld, shopify,
             fetch_cart_price=fetch_cart_price, discount_code=discount_code, discount_pct=args.discount_pct,
         )
         print(json.dumps(rows, indent=2))
