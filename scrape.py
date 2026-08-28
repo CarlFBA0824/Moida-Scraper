@@ -29,27 +29,18 @@ one row per variation (a product with 3 sizes/flavors produces 3 rows):
 original_price / sale_price come from the product page itself (Shopify's
 compare_at_price vs price) - reliable, same technique as everything else.
 
-cart_price / cart_discount simulate adding the item to a fresh cart via
-Shopify's cart AJAX API (POST /cart/add.js), then apply a discount code
-(default "WELCOME30", Moida's site-wide auto-applied welcome discount) the
-same way the site's own cart-drawer coupon form does (POST /cart with a
-"discount" field), then read the final price back via GET /cart.js. This
-captures a cart-level discount that never appears anywhere in the product
-page's own data - Shopify only calculates it once a discount code is
-actually attached to a cart.
+cart_price is computed directly as sale_price with Moida's "welcome30"
+cart-level discount applied (default 30% off) - confirmed live against two
+real cart line items (Anua $19.90 -> $13.93, Arencia $16.80 -> $11.76, both
+exactly 30% off sale_price). An earlier version simulated an actual
+add-to-cart + apply-discount-code + read-cart round trip via Shopify's cart
+AJAX API, but that depended on ZenRows correctly forwarding cookies across
+three separate requests, which didn't reliably apply the discount in
+practice - a direct calculation is simpler and gives the same result.
 
-Use --discount-code CODE to target a different promo code, or
---discount-code "" to skip applying any code (still runs the add/read
-cycle, useful for sites with an automatic no-code discount). Pass
---skip-cart-price to disable the whole cart simulation (saves ~2 extra
-ZenRows requests per variation) if you just want original/sale price.
-
-Caveat: the cart-price simulation is UNVERIFIED against the live site (built
-and mock-tested against numbers from a screenshot: $25.41 -> $17.79 via
-welcome30, math checks out), but real ZenRows header/cookie passthrough
-behavior was an assumption, not something confirmed live. Do a --limit 3
-smoke test and check the log/output for populated cart_price before a full
-run.
+Use --discount-pct to change the assumed percentage (default 30), or
+--skip-cart-price to leave cart_price blank and only report original/sale
+price.
 """
 
 import argparse
@@ -165,59 +156,6 @@ class ZenRowsClient:
                 time.sleep(self._settings.retry_backoff_seconds * attempt)
 
         raise ZenRowsError(f"Failed to fetch {url} after {retries} attempt(s)") from last_error
-
-    def request(
-        self,
-        url: str,
-        method: str = "GET",
-        json_body: Optional[dict] = None,
-        data_body: Optional[str] = None,
-        extra_headers: Optional[Dict[str, str]] = None,
-        max_retries: Optional[int] = None,
-    ) -> requests.Response:
-        """Low-level passthrough request for JSON/form API endpoints (Shopify's
-        /cart/add.js, /cart.js, /cart discount form) that need a specific HTTP
-        method, body, and/or forwarded headers (e.g. a Cookie to keep one cart
-        across calls). Relies on ZenRows' custom_headers passthrough to deliver
-        our headers to the target site, not just to ZenRows itself.
-
-        Pass json_body for JSON endpoints, or data_body (a pre-encoded string,
-        e.g. form-urlencoded) for endpoints like Shopify's cart discount form -
-        not both."""
-        params = {
-            "apikey": self._settings.zenrows_api_key,
-            "url": url,
-            "js_render": "false",
-            "custom_headers": "true",
-        }
-        retries = max_retries if max_retries is not None else self._settings.max_retries
-        last_error: Optional[Exception] = None
-
-        for attempt in range(1, retries + 1):
-            try:
-                response = self._session.request(
-                    method,
-                    self._settings.zenrows_endpoint,
-                    params=params,
-                    json=json_body,
-                    data=data_body,
-                    headers=extra_headers or {},
-                    timeout=self._settings.request_timeout_seconds,
-                )
-                if response.status_code == 200:
-                    return response
-                last_error = ZenRowsError(
-                    f"ZenRows returned HTTP {response.status_code} for {method} {url}: {response.text[:300]}"
-                )
-                logger.warning("Attempt %d/%d failed for %s %s: %s", attempt, retries, method, url, last_error)
-            except requests.RequestException as exc:
-                last_error = exc
-                logger.warning("Attempt %d/%d errored for %s %s: %s", attempt, retries, method, url, exc)
-
-            if attempt < retries:
-                time.sleep(self._settings.retry_backoff_seconds * attempt)
-
-        raise ZenRowsError(f"Failed to {method} {url} after {retries} attempt(s)") from last_error
 
 
 # --------------------------------------------------------------------------
@@ -444,111 +382,17 @@ def fetch_shopify_variants(client: ZenRowsClient, product_url: str) -> Optional[
     return {"name": product.get("title"), "variants": result}
 
 
-def apply_discount_code(
-    client: ZenRowsClient, base_url: str, cookie_header: str, discount_code: str
-) -> str:
-    """Applies a discount code to the current cart by POSTing to /cart with a
-    'discount' field - the same request Shopify's cart-drawer coupon form
-    (<form is="cart-discount" action="/cart" method="POST"><input
-    name="discount" ...></form>) sends. Best-effort: on any failure, just
-    returns the original cookie so the caller can still read the cart back
-    (without the discount) instead of aborting.
-    """
-    discount_url = f"{base_url}/cart"
+def apply_cart_discount(price: Any, discount_pct: float) -> Optional[float]:
+    """Applies Moida's assumed flat cart-level discount (e.g. 'welcome30')
+    directly to a product-page price, rather than simulating a live
+    add-to-cart round trip - confirmed live against real cart line items
+    (Anua $19.90 -> $13.93, Arencia $16.80 -> $11.76, both exactly 30% off)."""
+    if price is None:
+        return None
     try:
-        response = client.request(
-            discount_url,
-            method="POST",
-            data_body=f"discount={urllib.parse.quote(discount_code)}",
-            extra_headers={
-                "Cookie": cookie_header,
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "text/html",
-            },
-            max_retries=1,
-        )
-    except ZenRowsError as exc:
-        logger.info("Applying discount code %s failed: %s", discount_code, exc)
-        return cookie_header
-
-    return response.headers.get("Zr-Cookies") or cookie_header
-
-
-def get_cart_discounted_price(
-    client: ZenRowsClient,
-    base_url: str,
-    variant_id: Any,
-    quantity: int = 1,
-    discount_code: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
-    """Simulates adding one variant to a fresh cart via Shopify's cart AJAX
-    API (POST /cart/add.js), optionally applies a discount code the same way
-    the site's own coupon form does (POST /cart with a 'discount' field),
-    then reads the final per-unit price back via GET /cart.js - capturing a
-    cart-level discount (e.g. Moida's site-wide 'welcome30' code) that never
-    appears in the product page's own price data.
-
-    Best-effort: relies on ZenRows forwarding our custom headers/cookies to
-    the target site so the same cart persists across calls. Returns None
-    (logging why) if anything about that chain doesn't work.
-    """
-    if not variant_id:
+        return round(float(price) * (1 - discount_pct / 100), 2)
+    except (TypeError, ValueError):
         return None
-
-    add_url = f"{base_url}/cart/add.js"
-    try:
-        add_response = client.request(
-            add_url,
-            method="POST",
-            json_body={"items": [{"id": int(variant_id), "quantity": quantity}]},
-            extra_headers={"Content-Type": "application/json", "Accept": "application/json"},
-            max_retries=1,
-        )
-    except ZenRowsError as exc:
-        logger.info("cart/add.js failed for variant %s: %s", variant_id, exc)
-        return None
-
-    # ZenRows doesn't surface the target's Set-Cookie in the standard header
-    # (requests won't auto-parse it into add_response.cookies) - it forwards
-    # it via its own "Zr-Cookies" header, already formatted as a ready-to-use
-    # "name=value; name2=value2" Cookie header string.
-    cookie_header = add_response.headers.get("Zr-Cookies")
-    if not cookie_header:
-        logger.info(
-            "No cart cookie returned for variant %s; cannot read cart back. "
-            "add_response status=%s headers=%s body[:300]=%r",
-            variant_id, add_response.status_code, dict(add_response.headers), add_response.text[:300],
-        )
-        return None
-
-    if discount_code:
-        cookie_header = apply_discount_code(client, base_url, cookie_header, discount_code)
-
-    cart_url = f"{base_url}/cart.js"
-    try:
-        cart_response = client.request(
-            cart_url,
-            method="GET",
-            extra_headers={"Cookie": cookie_header, "Accept": "application/json"},
-            max_retries=1,
-        )
-        cart_json = cart_response.json()
-    except (ZenRowsError, ValueError) as exc:
-        logger.info("cart.js failed for variant %s: %s", variant_id, exc)
-        return None
-
-    for item in cart_json.get("items", []):
-        if str(item.get("variant_id")) == str(variant_id):
-            discounts = item.get("discounts") or []
-            final_price = item.get("final_price")
-            original_price = item.get("original_price")
-            return {
-                "cart_price": (final_price / 100) if isinstance(final_price, (int, float)) else None,
-                "cart_original_price": (original_price / 100) if isinstance(original_price, (int, float)) else None,
-                "cart_discount_titles": ", ".join(d.get("title", "") for d in discounts if d.get("title")),
-            }
-    logger.info("Added variant %s not found in cart.js response", variant_id)
-    return None
 
 
 def scrape_product(
@@ -558,11 +402,11 @@ def scrape_product(
     try_shopify_json: bool = True,
     fetch_cart_price: bool = False,
     discount_code: Optional[str] = None,
+    discount_pct: float = 30.0,
 ) -> List[Dict[str, Any]]:
     response = client.fetch(product_url, js_render=True, premium_proxy=True)
     jsonld = parse_product_jsonld(response.text)
     shopify = fetch_shopify_variants(client, product_url) if try_shopify_json else None
-    base_url = "{0.scheme}://{0.netloc}".format(urllib.parse.urlsplit(product_url))
 
     product_name = (shopify or {}).get("name") or jsonld.get("name") or product_url
     gtin_by_sku = {v["sku"]: v["gtin"] for v in jsonld["variants"] if v.get("sku")}
@@ -580,15 +424,8 @@ def scrape_product(
                 sale_price, currency = price_by_sku[sku]
             original_price = v.get("compare_at_price") or sale_price
 
-            cart_price = cart_original_price = cart_discount_titles = None
-            if fetch_cart_price:
-                cart_result = get_cart_discounted_price(
-                    client, base_url, v.get("variant_id"), discount_code=discount_code
-                )
-                if cart_result:
-                    cart_price = cart_result["cart_price"]
-                    cart_original_price = cart_result["cart_original_price"]
-                    cart_discount_titles = cart_result["cart_discount_titles"]
+            cart_price = apply_cart_discount(sale_price, discount_pct) if fetch_cart_price else None
+            cart_discount = f"{discount_code} ({discount_pct:g}% off, assumed)" if cart_price is not None else None
 
             rows.append(
                 {
@@ -599,23 +436,26 @@ def scrape_product(
                     "original_price": original_price,
                     "sale_price": sale_price,
                     "cart_price": cart_price,
-                    "cart_discount": cart_discount_titles,
+                    "cart_discount": cart_discount,
                     "currency": currency,
                     "gtin": gtin,
                 }
             )
     elif jsonld["variants"]:
         for v in jsonld["variants"]:
+            sale_price = v.get("price")
+            cart_price = apply_cart_discount(sale_price, discount_pct) if fetch_cart_price else None
+            cart_discount = f"{discount_code} ({discount_pct:g}% off, assumed)" if cart_price is not None else None
             rows.append(
                 {
                     "product_name": product_name,
                     "product_url": product_url,
                     "variation": v.get("name") or "Default",
                     "sku": v.get("sku"),
-                    "original_price": v.get("price"),
-                    "sale_price": v.get("price"),
-                    "cart_price": None,
-                    "cart_discount": None,
+                    "original_price": sale_price,
+                    "sale_price": sale_price,
+                    "cart_price": cart_price,
+                    "cart_discount": cart_discount,
                     "currency": v.get("currency", "USD"),
                     "gtin": v.get("gtin"),
                 }
@@ -703,12 +543,15 @@ def main() -> None:
     )
     parser.add_argument(
         "--skip-cart-price", action="store_true",
-        help="Don't simulate add-to-cart to capture cart-level discount prices (saves ~2 extra requests/variant)",
+        help="Leave cart_price blank instead of computing sale_price minus the assumed cart discount",
     )
     parser.add_argument(
-        "--discount-code", type=str, default="WELCOME30",
-        help="Discount code to apply to the simulated cart before reading cart_price "
-             "(default: WELCOME30). Pass an empty string ('') to skip applying any code.",
+        "--discount-code", type=str, default="welcome30",
+        help="Label recorded in cart_discount for the assumed cart-level discount (default: welcome30)",
+    )
+    parser.add_argument(
+        "--discount-pct", type=float, default=30.0,
+        help="Percent off sale_price to compute cart_price as (default: 30, Moida's welcome30 discount)",
     )
     args = parser.parse_args()
 
@@ -720,7 +563,7 @@ def main() -> None:
     if args.url:
         rows = scrape_product(
             client, settings, args.url, try_shopify_json=True,
-            fetch_cart_price=fetch_cart_price, discount_code=discount_code,
+            fetch_cart_price=fetch_cart_price, discount_code=discount_code, discount_pct=args.discount_pct,
         )
         print(json.dumps(rows, indent=2))
         return
@@ -740,7 +583,7 @@ def main() -> None:
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {
             executor.submit(
-                scrape_product, client, settings, url, is_shopify, fetch_cart_price, discount_code
+                scrape_product, client, settings, url, is_shopify, fetch_cart_price, discount_code, args.discount_pct
             ): url
             for url in product_urls
         }

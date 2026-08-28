@@ -18,15 +18,31 @@ per variation:
 
 - `original_price` - the listed/compare-at price on the product page
 - `sale_price` - the page's own (already discounted) price
-- `cart_price` - the final price after simulating add-to-cart + applying the
-  `welcome30` discount code, via Shopify's cart AJAX API
+- `cart_price` - `sale_price` with the welcome30 discount applied
 
-**Caveat:** the cart-price simulation is unverified against the live site -
-built and mock-tested against numbers from a screenshot ($25.41 -> $17.79 via
-welcome30, math checks out), but it depends on ZenRows correctly forwarding
-custom headers/cookies to the target site. Run a `--limit 3` smoke test
-first and check that `cart_price` actually comes back populated before a
-full run.
+`cart_price` is a direct calculation (`sale_price * (1 - discount_pct/100)`,
+default 30%), confirmed against two real cart line items (Anua $19.90 ->
+$13.93, Arencia $16.80 -> $11.76, both exactly 30% off). An earlier version
+tried to simulate a live add-to-cart + apply-discount-code round trip
+instead, but that depended on ZenRows correctly forwarding cookies across
+three separate requests and didn't reliably apply the discount in practice
+- if Moida ever changes the discount rate, update it with `--discount-pct`.
+
+## Known issue: `/search` pages get blocked
+
+Fetching a `/search?q=...` results page through ZenRows (JS render + premium
+proxy) has consistently failed with error `422 RESP001 "Could not get
+content"` after ~150-170s, regardless of wait strategy (`wait_for` selector,
+`wait_ms`, or a longer client timeout) - and ZenRows doesn't charge credits
+for it, confirming it's a real server-side failure, not a fluke. Individual
+`/products/<handle>` pages fetch fine through the same setup, so this looks
+like a block/rate-limit specific to Moida's `/search` endpoint (possibly a
+separate, more heavily bot-protected backend than plain product/collection
+pages), not the whole site.
+
+**Workaround:** use a `/collections/<handle>` page instead of `/search` when
+one exists for the products you want - it uses the same lightweight
+Shopify product-listing pattern that already works.
 
 ## Setup
 
@@ -67,8 +83,9 @@ Options:
 | `--workers` | 4 | Concurrent product page fetches |
 | `--limit N` | none | Only scrape the first N products |
 | `--output-dir` | `output` | Where CSV/JSON results are written |
-| `--discount-code` | `WELCOME30` | Discount code applied to the simulated cart (pass `""` to skip) |
-| `--skip-cart-price` | off | Skip the add-to-cart simulation (saves ~2 ZenRows requests/variant) |
+| `--discount-code` | `welcome30` | Label recorded in `cart_discount` for the assumed cart discount |
+| `--discount-pct` | `30` | Percent off `sale_price` used to compute `cart_price` |
+| `--skip-cart-price` | off | Leave `cart_price` blank instead of computing it |
 | `--url` | none | Debug mode: scrape a single product URL and print the raw result |
 
 Results are written to `output/<slug>_<timestamp>.csv` and `.json`, one row
@@ -87,14 +104,13 @@ columns:
    proxy, since retail sites commonly bot-protect product pages), and
    `original_price`/`sale_price`/variation/SKU/GTIN are extracted from the
    page's JSON-LD and the Shopify per-product JSON endpoint.
-3. `cart_price` is captured by simulating add-to-cart (`POST /cart/add.js`),
-   applying the discount code (`POST /cart`), then reading the final price
-   (`GET /cart.js`).
+3. `cart_price` is computed directly from `sale_price` and `--discount-pct`
+   (no extra network requests).
 
 ## Notes
 
-- ZenRows credit usage: roughly 1 request per page discovered + up to 4-5
-  requests per product (JSON probe, rendered HTML, add-to-cart, discount,
-  cart read). Use `--limit` and `--skip-cart-price` while tuning.
+- ZenRows credit usage: roughly 1 request per page discovered + up to 2
+  requests per product (JSON probe + rendered HTML). Use `--limit` while
+  tuning.
 - Respect the site's `robots.txt` and terms of service, and keep request
   concurrency reasonable (`--workers`).
