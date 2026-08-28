@@ -186,15 +186,20 @@ def _urls_from_products_json(payload: dict, base_url: str) -> List[str]:
 
 def _product_matches_vendor(product: dict, needle: str) -> bool:
     """True if needle appears (case-insensitively, substring) in the
-    product's vendor field OR any of its tags. Substring rather than exact
-    match, and checking tags too, so a collab line (e.g. "MOIDA X MEDICUBE")
-    or a product tagged with the brand under a different vendor field isn't
-    silently dropped - erring toward over-matching rather than missing real
-    products, since a few false positives are easy to spot-check but a
+    product's vendor field, title, or any of its tags. Substring rather than
+    exact match, and checking title/tags too, so a collab line (e.g. "MOIDA
+    X MEDICUBE"), a bracketed brand prefix in the title ("[MEDICUBE] ...")
+    whose vendor field is set to something else (e.g. left as the
+    storefront's own name for an exclusive item), or a tag-only labeling
+    isn't silently dropped - erring toward over-matching rather than missing
+    real products, since a few false positives are easy to spot-check but a
     missed product isn't."""
     needle = needle.strip().lower()
     vendor = (product.get("vendor") or "").lower()
     if needle in vendor:
+        return True
+    title = (product.get("title") or "").lower()
+    if needle in title:
         return True
     return any(needle in (tag or "").lower() for tag in (product.get("tags") or []))
 
