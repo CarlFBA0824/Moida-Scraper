@@ -387,58 +387,75 @@ def _variant_from_offer(
     }
 
 
+def _parse_from_product_node(product: Dict[str, Any]) -> Dict[str, Any]:
+    top_gtin = _first_gtin(product)
+    variants = [
+        _variant_from_offer(offer, product.get("name"), top_gtin)
+        for offer in _normalize_offers(product)
+    ]
+    return {"name": product.get("name"), "sku": product.get("sku"), "gtin": top_gtin, "variants": variants}
+
+
+def _parse_from_product_group_node(group: Dict[str, Any]) -> Dict[str, Any]:
+    """Some Shopify themes emit schema.org's "ProductGroup" instead of (or
+    alongside) a plain "Product" for a product with multiple variants (e.g.
+    color options) - each variant is its own Product-like node inside
+    "hasVariant", carrying its own sku/gtin rather than a flat "offers" list
+    on the top object."""
+    top_gtin = _first_gtin(group)
+    variants = []
+    for variant_node in group.get("hasVariant") or []:
+        if not isinstance(variant_node, dict):
+            continue
+        variant_gtin = _first_gtin(variant_node) or top_gtin
+        offers = _normalize_offers(variant_node)
+        if offers:
+            variants.append(
+                _variant_from_offer(
+                    offers[0], variant_node.get("name") or group.get("name"), variant_gtin,
+                    fallback_sku=variant_node.get("sku"),
+                )
+            )
+        else:
+            variants.append(
+                {
+                    "sku": variant_node.get("sku"),
+                    "name": variant_node.get("name") or group.get("name"),
+                    "price": None,
+                    "currency": "USD",
+                    "availability": None,
+                    "gtin": variant_gtin,
+                }
+            )
+    return {"name": group.get("name"), "sku": group.get("productGroupID"), "gtin": top_gtin, "variants": variants}
+
+
 def parse_product_jsonld(html: str) -> Dict[str, Any]:
     soup = BeautifulSoup(html, "lxml")
     blocks = _extract_jsonld_blocks(soup)
 
+    # A page can carry both a "Product" and a "ProductGroup" block at once
+    # (seen live: a near-empty "Product" stub with no offers, alongside a
+    # "ProductGroup" holding the real per-variant sku/gtin data) - so don't
+    # stop at the first block found by type; use whichever parse actually
+    # yields variants, preferring "Product" only when it has real data.
     product = _find_product_jsonld(blocks)
     if product:
-        top_gtin = _first_gtin(product)
-        variants = [
-            _variant_from_offer(offer, product.get("name"), top_gtin)
-            for offer in _normalize_offers(product)
-        ]
-        return {"name": product.get("name"), "sku": product.get("sku"), "gtin": top_gtin, "variants": variants}
+        result = _parse_from_product_node(product)
+        if result["variants"]:
+            return result
+    else:
+        result = None
 
-    # Some Shopify themes emit schema.org's "ProductGroup" instead of a plain
-    # "Product" for a product with multiple variants (e.g. color options) -
-    # each variant is its own Product-like node inside "hasVariant", carrying
-    # its own sku/gtin rather than a flat "offers" list on the top object.
     group = _find_jsonld_of_type(blocks, "ProductGroup")
     if group:
-        top_gtin = _first_gtin(group)
-        variants = []
-        for variant_node in group.get("hasVariant") or []:
-            if not isinstance(variant_node, dict):
-                continue
-            variant_gtin = _first_gtin(variant_node) or top_gtin
-            offers = _normalize_offers(variant_node)
-            if offers:
-                variants.append(
-                    _variant_from_offer(
-                        offers[0], variant_node.get("name") or group.get("name"), variant_gtin,
-                        fallback_sku=variant_node.get("sku"),
-                    )
-                )
-            else:
-                variants.append(
-                    {
-                        "sku": variant_node.get("sku"),
-                        "name": variant_node.get("name") or group.get("name"),
-                        "price": None,
-                        "currency": "USD",
-                        "availability": None,
-                        "gtin": variant_gtin,
-                    }
-                )
-        return {
-            "name": group.get("name"),
-            "sku": group.get("productGroupID"),
-            "gtin": top_gtin,
-            "variants": variants,
-        }
+        group_result = _parse_from_product_group_node(group)
+        if group_result["variants"]:
+            return group_result
+        if result is None:
+            result = group_result
 
-    return {"name": None, "sku": None, "gtin": None, "variants": []}
+    return result or {"name": None, "sku": None, "gtin": None, "variants": []}
 
 
 def fetch_shopify_variants(client: ZenRowsClient, product_url: str) -> Optional[Dict[str, Any]]:
