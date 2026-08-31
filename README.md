@@ -46,7 +46,7 @@ on the store) filtered by `--vendor-filter` (default `Medicube`), instead of
 rendering), and each product entry includes a `"vendor"` field - so this
 walks the whole catalog's lightweight JSON and keeps only vendor-matching
 products, sidestepping the `/search` block entirely. Change `--vendor-filter`
-to target a different brand, or pass `--vendor-filter ""` to keep every
+to target a different brand, or pass `--vendor-filter none` to keep every
 product on a `--collection-url` you point at directly (e.g. a real
 `/collections/<handle>` page, if one exists for what you want).
 
@@ -77,7 +77,7 @@ Target a different brand or collection:
 
 ```bash
 python scrape.py --vendor-filter "Anua"
-python scrape.py --collection-url https://moidaus.com/collections/awards-moida-2026-mid-year-awards-_event --vendor-filter ""
+python scrape.py --collection-url https://moidaus.com/collections/awards-moida-2026-mid-year-awards-_event --vendor-filter none
 ```
 
 Options:
@@ -114,6 +114,32 @@ columns:
    page's JSON-LD and the Shopify per-product JSON endpoint.
 3. `cart_price` is computed directly from `sale_price` and `--discount-pct`
    (no extra network requests).
+
+## Matching against Amazon: master.py
+
+After scraping a brand's products and pushing the resulting GTINs through
+ScanUnlimited and Keepa, merge all three into one ranked report:
+
+```bash
+python master.py --vitacost output/moidaus_kundal_20260831_104821.csv --scanunlimited ScanUnlimited_export.csv --keepa KeepaExport.csv --source-name Moida --output output/master_kundal.xlsx
+```
+
+(`--vitacost` is just the flag name kept for compatibility with the sibling
+`Web-Scraping` repo's copy of this script - pass any scrape CSV there,
+Moida's included.) This is a plain copy of `Web-Scraping`'s `master.py`,
+kept here too so both projects can run from one folder. See that repo's
+copy for the full matching/flagging logic docs (GTIN matching, sell-price
+fallback chain, `no_buy_box`/`bundle_mismatch`/etc. flags) - the logic is
+identical, just kept in sync manually between the two repos.
+
+## Merging multiple brand CSVs
+
+Running `scrape.py` once per brand produces separate CSVs. To submit them
+to ScanUnlimited/Keepa/master.py as one batch instead of per brand:
+
+```bash
+python merge_csv.py output/moidaus_all-Medicube_*.csv output/moidaus_all-Celimax_*.csv --output output/moidaus_combined.csv
+```
 
 ## Notes
 
