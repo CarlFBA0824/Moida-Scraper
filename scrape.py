@@ -681,7 +681,8 @@ def main() -> None:
         help="Only keep products where this appears (case-insensitive, substring) in the Shopify "
              "'vendor' field or any tag -- catches collabs/mislabeled vendors too, at the cost of the "
              "occasional false positive. Only applies to a JSON-backed collection page (not the "
-             "HTML-parsing fallback). Pass '' to keep every product in --collection-url.",
+             "HTML-parsing fallback). Pass 'none' (or an empty '') to keep every product in "
+             "--collection-url -- e.g. when --collection-url already points at a single-brand collection.",
     )
     parser.add_argument("--max-pages", type=int, default=10)
     parser.add_argument("--workers", type=int, default=4)
@@ -741,7 +742,10 @@ def main() -> None:
         print(json.dumps(rows, indent=2))
         return
 
-    vendor_filter = args.vendor_filter or None
+    # 'none' as a sentinel is easier to type reliably in a shell than an
+    # empty-string argument (--vendor-filter "" can silently break if quote
+    # characters get mangled by copy-paste, e.g. smart quotes).
+    vendor_filter = None if not args.vendor_filter or args.vendor_filter.strip().lower() == "none" else args.vendor_filter
     logger.info(
         "Collecting product URLs from %s%s",
         args.collection_url, f" (vendor={vendor_filter!r})" if vendor_filter else "",
