@@ -394,8 +394,20 @@ def build_master_rows(
 
         # "Contents count" - items inside one retail unit, e.g. "180 Capsules"
         # inside one bottle. Scraped product name vs. Amazon's Size
-        # field ("180 Count (Pack of 1)").
-        vitacost_contents_qty = extract_pack_qty(v.get("product_name"))
+        # field ("180 Count (Pack of 1)"). Also checks `variation` (not
+        # just product_name): confirmed on real hardypaw data that the
+        # pack count for a multipack variant (e.g. "3 boxes (90 sachets)")
+        # lives ONLY in variation, with product_name identical across
+        # all pack sizes of the same product -- product_name alone would
+        # silently return None for every hardypaw multipack, so a 1-box,
+        # 3-box, and 6-box variant that happen to share a barcode (a
+        # separate known hardypaw data issue) could all get matched to
+        # the same single Amazon ASIN with no contents_count_mismatch
+        # ever firing to catch it.
+        vitacost_name_and_variation = " ".join(
+            s for s in (v.get("product_name"), v.get("variation")) if s
+        )
+        vitacost_contents_qty = extract_pack_qty(vitacost_name_and_variation)
         amazon_contents_qty = None
         if keepa:
             amazon_contents_qty = extract_amazon_count(get_ci(keepa, "Size"))
@@ -407,13 +419,16 @@ def build_master_rows(
         # ASIN is a "Pack of 6" of that same box. The scrape source always
         # sells one bundle per SKU (implicitly 1) unless its own name says
         # otherwise; Amazon's bundle count comes from Keepa/ScanUnlimited's
-        # own "Package Quantity" field, or a "Pack of N" mention in the title
-        # when that structured field is missing or self-inconsistent (Keepa
-        # sometimes has a title saying "Pack of 6" while its own Package
-        # Quantity field says 1 for the same ASIN - a source data error we
-        # can't resolve, so we take whichever signal indicates a bundle).
+        # own "Package Quantity" field, or a "Pack of N" mention in the
+        # title OR the Size field (confirmed: Amazon variant listings
+        # commonly carry the real bundle count only in Size, e.g. "2.1
+        # Ounce (Pack of 10)", with a title that never says "Pack of N" at
+        # all and a Package: Quantity field that's 1/blank for the same
+        # ASIN - checking title alone missed a real 1-unit-vs-10-pack
+        # mismatch that would have shown a fake ~500% ROI).
         vitacost_bundle_qty = 1
         amazon_title = get_ci(keepa, "Title") if keepa else (get_ci(su, "Title") if su else None)
+        amazon_size = get_ci(keepa, "Size") if keepa else (get_ci(su, "Size") if su else None)
         amazon_bundle_qty_field = to_float(get_ci(keepa, "Package: Quantity")) if keepa else None
         if amazon_bundle_qty_field is None and su:
             amazon_bundle_qty_field = to_float(get_ci(su, "Package Quantity"))
@@ -421,7 +436,11 @@ def build_master_rows(
             # A literal 0 is a data gap, not a real "zero-count bundle".
             amazon_bundle_qty_field = None
         amazon_bundle_qty_title = extract_title_pack_qty(amazon_title)
-        candidates = [q for q in (amazon_bundle_qty_field, amazon_bundle_qty_title) if q is not None]
+        amazon_bundle_qty_size = extract_title_pack_qty(amazon_size)
+        candidates = [
+            q for q in (amazon_bundle_qty_field, amazon_bundle_qty_title, amazon_bundle_qty_size)
+            if q is not None
+        ]
         amazon_bundle_qty = max(candidates) if candidates else None
 
         flags = []
