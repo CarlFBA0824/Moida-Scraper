@@ -80,6 +80,13 @@ python scrape.py --vendor-filter "Anua"
 python scrape.py --collection-url https://moidaus.com/collections/awards-moida-2026-mid-year-awards-_event --vendor-filter none
 ```
 
+Confirmed working single-brand collection pages (skip the `/collections/all` vendor-filter walk entirely, since the brand already has its own dedicated collection page):
+
+```bash
+python scrape.py --collection-url https://moidaus.com/collections/celimax --vendor-filter none
+python scrape.py --collection-url https://moidaus.com/collections/medicube --vendor-filter none
+```
+
 Options:
 
 | Flag | Default | Description |
