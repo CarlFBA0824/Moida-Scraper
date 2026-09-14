@@ -73,6 +73,12 @@ Full run (default: every Medicube product on moidaus.com):
 python scrape.py
 ```
 
+Full catalog scrape (every vendor, all ~2475 products on `/collections/all`):
+
+```bash
+python scrape.py --vendor-filter none
+```
+
 Target a different brand or collection:
 
 ```bash
@@ -93,7 +99,7 @@ Options:
 |---|---|---|
 | `--collection-url` | `https://moidaus.com/collections/all` | Full URL of the collection page to scrape |
 | `--vendor-filter` | `Medicube` | Only keep products whose Shopify `vendor` field matches (case-insensitive); pass `""` to keep everything |
-| `--max-pages` | 10 | Max pages to walk when discovering products |
+| `--max-pages` | 15 | Max `products.json` pages to walk when discovering products (250 products/page; 15 pages = 3750 products, covering `/collections/all`'s ~2475 products with headroom for catalog growth) |
 | `--workers` | 4 | Concurrent product page fetches |
 | `--limit N` | none | Only scrape the first N products |
 | `--output-dir` | `output` | Where CSV/JSON results are written |

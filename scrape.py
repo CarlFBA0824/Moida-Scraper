@@ -237,7 +237,7 @@ def _add_query_params(url: str, **params: Any) -> str:
 
 
 def collect_product_urls(
-    client: ZenRowsClient, settings: Settings, collection_url: str, max_pages: int = 10,
+    client: ZenRowsClient, settings: Settings, collection_url: str, max_pages: int = 15,
     vendor_filter: Optional[str] = None,
 ) -> Tuple[List[str], bool]:
     collection_url = collection_url.rstrip("/")
@@ -684,7 +684,12 @@ def main() -> None:
              "HTML-parsing fallback). Pass 'none' (or an empty '') to keep every product in "
              "--collection-url -- e.g. when --collection-url already points at a single-brand collection.",
     )
-    parser.add_argument("--max-pages", type=int, default=10)
+    parser.add_argument(
+        "--max-pages", type=int, default=15,
+        help="Max products.json pages to walk during discovery (250 products/page). Default 15 "
+             "(3750 products) covers /collections/all's ~2475 products with headroom for catalog "
+             "growth -- the old default of 10 (2500 products) left no margin at all.",
+    )
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--limit", type=int, default=None, help="Only scrape the first N products")
     parser.add_argument("--output-dir", type=str, default="output")
