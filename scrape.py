@@ -323,6 +323,17 @@ def collect_product_urls(
 
 GTIN_KEYS = ("gtin13", "gtin14", "gtin12", "gtin8", "gtin")
 
+# A real GTIN-8/12/13/14 is always all-digits. A handful of Moida products
+# (e.g. bundle boxes, sachets) put an internal SKU-shaped code like
+# "880SG00001710" in the GTIN field instead of a real barcode - flag those
+# rather than silently passing them through, since they'll false-match or
+# fail to match in downstream ScanUnlimited/Keepa lookups.
+GTIN_FORMAT_PATTERN = re.compile(r"^\d{8,14}$")
+
+
+def is_suspect_gtin(gtin: Optional[str]) -> bool:
+    return bool(gtin) and not GTIN_FORMAT_PATTERN.match(gtin)
+
 
 def _extract_jsonld_blocks(soup: BeautifulSoup) -> List[Dict[str, Any]]:
     blocks = []
@@ -579,6 +590,7 @@ def build_rows_from_product_data(
                     "cart_discount": cart_discount,
                     "currency": currency,
                     "gtin": gtin,
+                    "gtin_suspect": "yes" if is_suspect_gtin(gtin) else "",
                 }
             )
     elif jsonld["variants"]:
@@ -598,6 +610,7 @@ def build_rows_from_product_data(
                     "cart_discount": cart_discount,
                     "currency": v.get("currency", "USD"),
                     "gtin": v.get("gtin"),
+                    "gtin_suspect": "yes" if is_suspect_gtin(v.get("gtin")) else "",
                 }
             )
     else:
@@ -614,6 +627,7 @@ def build_rows_from_product_data(
                 "cart_discount": None,
                 "currency": None,
                 "gtin": None,
+                "gtin_suspect": "",
             }
         )
 
@@ -627,7 +641,7 @@ def build_rows_from_product_data(
 FIELDNAMES = [
     "product_name", "product_url", "variation", "sku",
     "original_price", "sale_price", "cart_price", "cart_discount",
-    "currency", "gtin",
+    "currency", "gtin", "gtin_suspect",
 ]
 
 

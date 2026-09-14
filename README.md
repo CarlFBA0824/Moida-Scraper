@@ -112,7 +112,13 @@ Results are written to `output/<slug>_<timestamp>.csv` and `.json`, one row
 per **variation** (a product with 3 flavors/sizes produces 3 rows), with
 columns:
 
-`product_name, product_url, variation, sku, original_price, sale_price, cart_price, cart_discount, currency, gtin`
+`product_name, product_url, variation, sku, original_price, sale_price, cart_price, cart_discount, currency, gtin, gtin_suspect`
+
+`gtin_suspect` is `"yes"` when `gtin` is non-empty but not a plain 8-14 digit
+barcode (e.g. `880SG00001710`) - a handful of Moida listings (bundle boxes,
+sachets) put an internal SKU-shaped code in the GTIN field instead of a real
+barcode, which would otherwise silently fail to match in downstream
+ScanUnlimited/Keepa lookups.
 
 ## How it works
 
