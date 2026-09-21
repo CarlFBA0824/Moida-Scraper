@@ -1,0 +1,85 @@
+# Carl's approved-to-sell brand list for moidaus.com.
+# One brand per line; blank lines and lines starting with # are ignored.
+# Pass this file to scrape.py with --vendor-file to scrape only these
+# brands out of /collections/all in one pass, instead of the whole catalog.
+#
+# Medicube and Celimax are deliberately left out -- they already have their
+# own dedicated collection pages/scrapes (see README), so re-running them
+# here would just burn extra ZenRows credits on products already covered.
+#
+# "Auna" from the original list was confirmed to actually be ANUA (Carl
+# checked manually) -- listed here under its real name so it actually
+# matches products on the site.
+9WISHES
+ACWELL
+ANUA
+BARULAB
+BiBiANG
+by juccy
+B_LAB
+Cell Fusion C
+Cos De Baha
+Dear Doer
+Derma-B
+Derma:B
+Dr.Ceuracle
+Dr.VITA
+EITHER&
+ELROEL
+essl
+EYECANDY
+Fwee
+G9SKIN
+GROWUS
+hetras
+Holika Holika
+House of Hur
+iUNIK
+KAINE
+KLAVUU
+KOELF
+KUNDAL
+Lagom
+LalaRecipe
+Lindsay
+make p:rem
+Mary&May
+Melixir
+MIGUHARA
+Mizon
+MUZIGAE MANSION
+Nacific
+NEEDLY
+Neogen
+NINELESS
+nooni
+nuse
+ODDTYPE
+Ongredients
+OOTD
+P.CALM
+PETITFEE
+plu
+PODL
+PURCELL
+Real Barrier
+RETURNITY
+rom&nd
+ROOTON
+Rovectin
+Seapuri
+SeohaeSol
+shaishaishai
+Skinfood
+SNP
+Studio17
+Suelo
+TFIT
+The Crème Shop
+TIAM
+Tosowoong
+Treecell
+ViveLab
+YNM
+ZEROID
+zipiderm

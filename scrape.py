@@ -204,14 +204,22 @@ def _product_matches_vendor(product: dict, needle: str) -> bool:
     return any(needle in (tag or "").lower() for tag in (product.get("tags") or []))
 
 
-def _urls_from_products_json_filtered(payload: dict, base_url: str, vendor_filter: Optional[str]) -> List[str]:
-    """Like _urls_from_products_json, but keeps only products matching
-    vendor_filter per _product_matches_vendor (or all products if
-    vendor_filter is falsy) - lets discovery walk a big catch-all collection
-    like /collections/all and keep just the brand we care about."""
+def _product_matches_any_vendor(product: dict, needles: List[str]) -> bool:
+    """OR of _product_matches_vendor across a whole approved-brand list, so
+    a single /collections/all walk can keep every brand you're allowed to
+    sell in one pass instead of one full-catalog scrape per brand."""
+    return any(_product_matches_vendor(product, needle) for needle in needles)
+
+
+def _urls_from_products_json_filtered(payload: dict, base_url: str, vendor_filter: Optional[List[str]]) -> List[str]:
+    """Like _urls_from_products_json, but keeps only products matching any
+    entry in vendor_filter per _product_matches_any_vendor (or all products
+    if vendor_filter is falsy) - lets discovery walk a big catch-all
+    collection like /collections/all and keep just the brand(s) we care
+    about."""
     products = payload.get("products", [])
     if vendor_filter:
-        products = [p for p in products if _product_matches_vendor(p, vendor_filter)]
+        products = [p for p in products if _product_matches_any_vendor(p, vendor_filter)]
     return _urls_from_products_json({"products": products}, base_url)
 
 
@@ -238,7 +246,7 @@ def _add_query_params(url: str, **params: Any) -> str:
 
 def collect_product_urls(
     client: ZenRowsClient, settings: Settings, collection_url: str, max_pages: int = 15,
-    vendor_filter: Optional[str] = None,
+    vendor_filter: Optional[List[str]] = None,
 ) -> Tuple[List[str], bool]:
     collection_url = collection_url.rstrip("/")
     split = urllib.parse.urlsplit(collection_url)
@@ -276,7 +284,7 @@ def collect_product_urls(
         logger.info(
             "products.json page %d: %d products (%d matching%s, %d total matched)",
             page, raw_count, len(new_urls),
-            f" vendor={vendor_filter!r}" if vendor_filter else "", len(all_urls),
+            f" vendor in {vendor_filter!r}" if vendor_filter else "", len(all_urls),
         )
         if raw_count < 250:
             break  # last page: Shopify returned fewer than the requested limit
@@ -664,11 +672,13 @@ def export_json(rows: List[Dict], path: Path) -> None:
 # Entry point
 # --------------------------------------------------------------------------
 
-def slug_from_url(url: str, vendor_filter: Optional[str] = None) -> str:
+def slug_from_url(url: str, vendor_filter: Optional[List[str]] = None) -> str:
     """Derive a short, filesystem-safe label from a collection/search URL's
     host and last path segment (or its query, for a /search URL), plus the
     vendor filter if any - used to prefix output filenames so results from
-    different searches/collections/vendors don't collide or get confused."""
+    different searches/collections/vendors don't collide or get confused.
+    A single vendor is used verbatim; more than one (an approved-brand list)
+    collapses to "Nbrands" instead of a giant filename."""
     parts = urllib.parse.urlsplit(url)
     host = parts.netloc.replace("www.", "").split(".")[0]
     segment = parts.path.rstrip("/").rsplit("/", 1)[-1] or "collection"
@@ -676,7 +686,8 @@ def slug_from_url(url: str, vendor_filter: Optional[str] = None) -> str:
         query = dict(urllib.parse.parse_qsl(parts.query))
         segment = f"search-{query.get('q', '')}" or segment
     if vendor_filter:
-        segment = f"{segment}-{vendor_filter}"
+        label = vendor_filter[0] if len(vendor_filter) == 1 else f"{len(vendor_filter)}brands"
+        segment = f"{segment}-{label}"
     return re.sub(r"[^a-zA-Z0-9_-]", "-", f"{host}_{segment}")[:80]
 
 
@@ -692,11 +703,20 @@ def main() -> None:
     )
     parser.add_argument(
         "--vendor-filter", type=str, default="Medicube",
-        help="Only keep products where this appears (case-insensitive, substring) in the Shopify "
-             "'vendor' field or any tag -- catches collabs/mislabeled vendors too, at the cost of the "
-             "occasional false positive. Only applies to a JSON-backed collection page (not the "
+        help="Only keep products where at least one of these appears (case-insensitive, substring, "
+             "comma-separated for more than one brand -- e.g. 'Medicube,Anua,rom&nd') in the Shopify "
+             "'vendor' field, title, or any tag -- catches collabs/mislabeled vendors too, at the cost "
+             "of the occasional false positive. Only applies to a JSON-backed collection page (not the "
              "HTML-parsing fallback). Pass 'none' (or an empty '') to keep every product in "
-             "--collection-url -- e.g. when --collection-url already points at a single-brand collection.",
+             "--collection-url -- e.g. when --collection-url already points at a single-brand collection. "
+             "Combined with --vendor-file if both are given.",
+    )
+    parser.add_argument(
+        "--vendor-file", type=str, default=None,
+        help="Path to a text file with one brand/vendor name per line (blank lines and lines starting "
+             "with # are ignored) -- lets you keep a long approved-brand list in a file instead of "
+             "retyping it as a giant --vendor-filter string every run. Combined with --vendor-filter if "
+             "both are given.",
     )
     parser.add_argument(
         "--max-pages", type=int, default=15,
@@ -764,10 +784,19 @@ def main() -> None:
     # 'none' as a sentinel is easier to type reliably in a shell than an
     # empty-string argument (--vendor-filter "" can silently break if quote
     # characters get mangled by copy-paste, e.g. smart quotes).
-    vendor_filter = None if not args.vendor_filter or args.vendor_filter.strip().lower() == "none" else args.vendor_filter
+    vendor_filter: List[str] = []
+    if args.vendor_filter and args.vendor_filter.strip().lower() != "none":
+        vendor_filter.extend(v.strip() for v in args.vendor_filter.split(",") if v.strip())
+    if args.vendor_file:
+        with open(args.vendor_file, encoding="utf-8") as f:
+            vendor_filter.extend(
+                line.strip() for line in f if line.strip() and not line.strip().startswith("#")
+            )
+    vendor_filter = vendor_filter or None
+
     logger.info(
         "Collecting product URLs from %s%s",
-        args.collection_url, f" (vendor={vendor_filter!r})" if vendor_filter else "",
+        args.collection_url, f" ({len(vendor_filter)} vendor filter(s): {vendor_filter!r})" if vendor_filter else "",
     )
     product_urls, is_shopify = collect_product_urls(
         client, settings, args.collection_url, max_pages=args.max_pages, vendor_filter=vendor_filter,
