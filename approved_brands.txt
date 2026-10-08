@@ -3,9 +3,11 @@
 # Pass this file to scrape.py with --vendor-file to scrape only these
 # brands out of /collections/all in one pass, instead of the whole catalog.
 #
-# Medicube and Celimax are deliberately left out -- they already have their
-# own dedicated collection pages/scrapes (see README), so re-running them
-# here would just burn extra ZenRows credits on products already covered.
+# Celimax is deliberately left out -- it already has its own dedicated
+# collection page/scrape (see README), so re-running it here would just
+# burn extra ZenRows credits on products already covered. Medicube is
+# included below per Carl's request even though it also has a dedicated
+# scrape, so this file always matches his full current approved list.
 #
 # "Auna" from the original list was confirmed to actually be ANUA (Carl
 # checked manually) -- listed here under its real name so it actually
@@ -44,6 +46,7 @@ LalaRecipe
 Lindsay
 make p:rem
 Mary&May
+Medicube
 Melixir
 MIGUHARA
 Mizon
