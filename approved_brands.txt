@@ -3,11 +3,9 @@
 # Pass this file to scrape.py with --vendor-file to scrape only these
 # brands out of /collections/all in one pass, instead of the whole catalog.
 #
-# Celimax is deliberately left out -- it already has its own dedicated
-# collection page/scrape (see README), so re-running it here would just
-# burn extra ZenRows credits on products already covered. Medicube is
-# included below per Carl's request even though it also has a dedicated
-# scrape, so this file always matches his full current approved list.
+# Medicube and Celimax are both included below per Carl's request, even
+# though each also has its own dedicated collection page/scrape (see
+# README), so this file always matches his full current approved list.
 #
 # "Auna" from the original list was confirmed to actually be ANUA (Carl
 # checked manually) -- listed here under its real name so it actually
@@ -19,6 +17,7 @@ BARULAB
 BiBiANG
 by juccy
 B_LAB
+Celimax
 Cell Fusion C
 Cos De Baha
 Dear Doer
