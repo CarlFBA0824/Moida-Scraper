@@ -267,10 +267,30 @@ def collect_product_urls(
             split._replace(path=f"{split.path}/products.json", query=urllib.parse.urlencode({"limit": 250, "page": page}))
         )
         try:
-            response = client.fetch(json_url, js_render=False, premium_proxy=False, max_retries=1)
+            # max_retries=1 (no actual retry) only for the very first page --
+            # that's a fail-fast probe for whether this collection supports
+            # products.json at all. From page 2 on we already know it does
+            # (is_shopify is True), so a transient failure there should be
+            # retried normally instead of silently truncating every
+            # remaining page of the walk and returning a partial result as
+            # if it were complete -- that previously produced scrapes that
+            # looked fine (no error, no crash) but were missing most of the
+            # catalog, with only a quiet INFO log to explain why.
+            response = client.fetch(
+                json_url, js_render=False, premium_proxy=False,
+                max_retries=1 if page == 1 else None,
+            )
             payload = response.json()
         except (ZenRowsError, ValueError) as exc:
-            logger.info("products.json unavailable (%s); falling back to HTML parsing", exc)
+            if page == 1:
+                logger.info("products.json unavailable (%s); falling back to HTML parsing", exc)
+            else:
+                logger.warning(
+                    "products.json page %d failed after retries (%s) -- stopping discovery early. "
+                    "Results below are INCOMPLETE (only %d product(s) matched from pages 1-%d of up "
+                    "to %d) -- rerun the scrape rather than trusting this as the full catalog.",
+                    page, exc, len(all_urls), page - 1, max_pages,
+                )
             break
 
         is_shopify = True
