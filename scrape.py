@@ -507,10 +507,17 @@ def parse_product_jsonld(html: str) -> Dict[str, Any]:
 def fetch_shopify_variants(client: ZenRowsClient, product_url: str) -> Optional[Dict[str, Any]]:
     json_url = f"{product_url}.json"
     try:
-        response = client.fetch(json_url, js_render=False, premium_proxy=False, max_retries=1)
+        # Default retry settings, not max_retries=1 -- this fetch runs once
+        # per product during the real scrape (not a one-shot probe), and a
+        # transient failure here silently degrades every affected product's
+        # row to the much weaker JSON-LD fallback (missing SKUs, bloated
+        # "[Brand] Product Name - Option" variation text instead of a clean
+        # "Default"/"Option: Value") rather than erroring loudly. A sustained
+        # ZenRows hiccup during one run previously did this to 100% of rows.
+        response = client.fetch(json_url, js_render=False, premium_proxy=False)
         payload = response.json()
     except (ZenRowsError, ValueError) as exc:
-        logger.info("Shopify product JSON unavailable for %s: %s", product_url, exc)
+        logger.warning("Shopify product JSON unavailable for %s after retries: %s", product_url, exc)
         return None
 
     product = payload.get("product")
