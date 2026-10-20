@@ -9,6 +9,83 @@ Vitacost scraper, or vice versa.
 Works against either a `/collections/<handle>` page or a `/search?q=...`
 results page on Moida.
 
+## Carl's workflow (step-by-step)
+
+This is the actual repeatable process, start to finish, for scraping the
+approved-brand list and turning it into a ranked opportunity report.
+
+1. **Pull the latest code.**
+   ```powershell
+   git pull
+   ```
+
+2. **(Optional) Update `approved_brands.txt`** if the approved-brand list
+   changed -- one brand name per line, `#` for comments. Commit/push after
+   editing so it's not lost.
+
+3. **Run the scrape**, scoped to the approved-brand list (much cheaper than
+   a full `/collections/all` run -- see Notes below on credit cost):
+   ```powershell
+   py scrape.py --vendor-file approved_brands.txt --workers 8
+   ```
+   (Use `py` instead of `python` if you get a "cannot find the path
+   specified" error -- see Troubleshooting below.)
+
+   Watch the log for:
+   - `Found N product URLs` near the top -- sanity-check N is in the
+     expected ballpark (not drastically lower than your last run with the
+     same brand list).
+   - Any `WARNING ... stopping discovery early` or `... after retries`
+     line -- either means the result is **incomplete**. Don't push an
+     incomplete scrape through ScanUnlimited/Keepa -- just rerun it.
+
+   Output lands in `output/moidaus_all-<N>brands_<timestamp>.csv` (and
+   `.json`).
+
+4. **Upload the CSV to ScanUnlimited.** On the scan-detail form, set:
+   - **Search By**: `UPC`
+   - **Product ID**: the `gtin` column
+   - **Cost**: the `cart_price` column
+   - **Currency**: USD, **Marketplace**: US, **Condition**: New
+   - Leave **Custom** blank and **DST Registered?** unchecked
+
+   Download the resulting `ScanUnlimited-<filename>-<id>.csv` export.
+
+5. **Push the same GTINs through Keepa** and download its export
+   (`KeepaExport-<date>-ProductViewer.csv`).
+
+6. **Run `master.py`** to merge the scrape + ScanUnlimited + Keepa into one
+   ranked report:
+   ```powershell
+   py master.py --vitacost "output\moidaus_all-<N>brands_<timestamp>.csv" --scanunlimited "output\ScanUnlimited-<...>.csv" --keepa "output\KeepaExport-<date>-ProductViewer.csv" --source-name Moida --output "output\master_moidaus_all-<N>brands_<date>.xlsx"
+   ```
+
+7. **Review the output**: the `Master` sheet holds clean, ranked
+   opportunities; `Needs Review` holds flagged rows (ambiguous match, bundle
+   mismatch, etc.) worth a manual look before acting on them.
+
+### Troubleshooting
+
+- **`Program 'python.exe' failed to run: ... cannot find the path
+  specified`** -- `python` isn't linked into PATH on this machine; use `py`
+  instead (`py scrape.py ...`, `py master.py ...`).
+- **Scrape finishes but row count looks way too low** for the brand list
+  size -- check the log for a `WARNING` about discovery stopping early or a
+  per-product fetch failing after retries; rerun the scrape rather than
+  trusting a result that logged one of those.
+- **Running low on ZenRows credits** -- a single product-page fetch
+  (JS render + premium proxy) can run ~25 credits, not the ~1-2 the Notes
+  section below assumes for a "cheap" request -- check your ZenRows
+  dashboard's credit balance before a big run, and prefer the approved-brand
+  scoped scrape (`--vendor-file approved_brands.txt`) over a full
+  `/collections/all` run.
+- **ScanUnlimited match rate looks suspiciously low** (most rows blank
+  ASIN) -- double check **Search By** was set to `UPC` on the scan form, not
+  ESBN or another code type. Even with that set correctly, a lot of niche
+  Korean-domestic brands simply won't match, since their barcode (GS1 Korea
+  prefix `880`) often isn't the same code Amazon's US listing uses -- that's
+  expected, not a bug.
+
 ## Moida-specific pricing
 
 Moida applies a site-wide automatic **"welcome30" discount** that only gets
