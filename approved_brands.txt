@@ -7,12 +7,10 @@
 # though each also has its own dedicated collection page/scrape (see
 # README), so this file always matches his full current approved list.
 #
-# "Auna" from the original list was confirmed to actually be ANUA (Carl
-# checked manually) -- listed here under its real name so it actually
-# matches products on the site.
+# ANUA (originally listed as the misspelling "Auna") was removed per
+# Carl's request.
 9WISHES
 ACWELL
-ANUA
 BARULAB
 BiBiANG
 by juccy
